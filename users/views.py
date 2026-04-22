@@ -34,6 +34,6 @@ class RegisterView(generics.CreateAPIView):
             user = serializer.save()
             return Response({
                 "user": serializer.data["username"],
-                "message": "Usuario creado exitosamente. Ahora puedes loguearte."
+                "message": "Usuario creado exitosamente. Ahora puedes acceder."
             }, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
