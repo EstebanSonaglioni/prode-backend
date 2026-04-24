@@ -1,46 +1,66 @@
 from django.db import models
 from django.contrib.auth.models import User # Usamos el modelo de usuario por defecto de Django
 
-class Prode(models.Model):
-    nombre = models.CharField(max_length=100)
-    descripcion = models.TextField(blank=True, null=True)
-    codigo_invitacion = models.CharField(max_length=20, unique=True)
-    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='prodes_creados')
-    privado = models.BooleanField(default=True)
-    fecha_creacion = models.DateTimeField(auto_now_add=True)
+class Tournament(models.Model):
+    """
+    Represents a specific 'Prode' instance (e.g., 'Work World Cup 2026').
+    """
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True, null=True)
+    invitation_code = models.CharField(max_length=20, unique=True)
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='created_tournaments')
+    is_private = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return self.nombre
+        return self.name
 
-class Partido(models.Model):
-    equipo_local = models.CharField(max_length=100)
-    equipo_visitante = models.CharField(max_length=100)
-    fecha_partido = models.DateTimeField()
-    goles_local_real = models.IntegerField(blank=True, null=True)
-    goles_visitante_real = models.IntegerField(blank=True, null=True)
-    
-    ESTADO_CHOICES = [
-        ('programado', 'Programado'),
-        ('en_curso', 'En Curso'),
-        ('finalizado', 'Finalizado'),
+class Match(models.Model):
+    """
+    Represents a real football match.
+    """
+    STATUS_CHOICES = [
+        ('scheduled', 'Scheduled'),
+        ('live', 'Live'),
+        ('finished', 'Finished'),
     ]
-    estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='programado')
 
-    def __str__(self):
-        return f"{self.equipo_local} vs {self.equipo_visitante}"
-
-class Prediccion(models.Model):
-    usuario = models.ForeignKey(User, on_delete=models.CASCADE)
-    prode = models.ForeignKey(Prode, on_delete=models.CASCADE, related_name='predicciones')
-    partido = models.ForeignKey(Partido, on_delete=models.CASCADE)
-    goles_local = models.IntegerField()
-    goles_visitante = models.IntegerField()
-    puntos_ganados = models.IntegerField(default=0)
-    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    home_team = models.CharField(max_length=100)
+    away_team = models.CharField(max_length=100)
+    match_date = models.DateTimeField()
+    home_score_real = models.IntegerField(blank=True, null=True)
+    away_score_real = models.IntegerField(blank=True, null=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='scheduled')
+    stage = models.CharField(max_length=50, blank=True, null=True) # e.g., 'Group Stage', 'Final'
 
     class Meta:
-        # Esto implementa el UNIQUE que hablamos para evitar duplicados
-        unique_together = ('usuario', 'prode', 'partido')
+        verbose_name_plural = "Matches"
 
     def __str__(self):
-        return f"{self.usuario.username} - {self.partido}"
+        return f"{self.home_team} vs {self.away_team}"
+
+class Prediction(models.Model):
+    """
+    A user's prediction for a specific match within a tournament.
+    """
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='predictions')
+    tournament = models.ForeignKey(Tournament, on_delete=models.CASCADE, related_name='predictions')
+    match = models.ForeignKey(Match, on_delete=models.CASCADE, related_name='predictions')
+    home_score_guess = models.IntegerField()
+    away_score_guess = models.IntegerField()
+    points_earned = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        # Prevents a user from predicting the same match twice in the same tournament
+        unique_together = ('user', 'tournament', 'match')
+
+    def __str__(self):
+        return f"{self.user.username} - {self.match}"
+
+class Team(models.Model):
+    name = models.CharField(max_length=100)
+    flag_url = models.URLField(blank=True)
+
+    def __str__(self):
+        return self.name
