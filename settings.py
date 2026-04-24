@@ -5,7 +5,8 @@ INSTALLED_APPS = [
     # ... aplicaciones de django
     'rest_framework',
     'corsheaders',
-    'predictions', # Tu app
+    'prode',
+    "users",
 ]
 
 MIDDLEWARE = [
