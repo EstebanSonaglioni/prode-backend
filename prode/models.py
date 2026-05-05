@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils.crypto import get_random_string
 from django.contrib.auth.models import User # Usamos el modelo de usuario por defecto de Django
 
 class Tournament(models.Model):
@@ -7,10 +8,17 @@ class Tournament(models.Model):
     """
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True, null=True)
-    invitation_code = models.CharField(max_length=20, unique=True)
+    invitation_code = models.CharField(max_length=20, unique=True, editable=False)
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='created_tournaments')
     is_private = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    participants = models.ManyToManyField(User, related_name='joined_tournaments', blank=True)
+
+    def save(self, *args, **kwargs):
+        if not self.invitation_code:
+            # Generamos un código aleatorio de 10 caracteres (puedes ajustar el largo)
+            self.invitation_code = get_random_string(length=10).upper()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name
