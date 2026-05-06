@@ -39,7 +39,8 @@ class Match(models.Model):
     home_score_real = models.IntegerField(blank=True, null=True)
     away_score_real = models.IntegerField(blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='scheduled')
-    stage = models.CharField(max_length=50, blank=True, null=True) # e.g., 'Group Stage', 'Final'
+    stage = models.CharField(max_length=50, blank=True, null=True)
+    tournaments = models.ManyToManyField(Tournament, related_name='matches')
 
     class Meta:
         verbose_name_plural = "Matches"

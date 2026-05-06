@@ -10,6 +10,9 @@ class MatchSerializer(serializers.ModelSerializer):
     class Meta:
         model = Match
         fields = '__all__'
+        extra_kwargs = {
+            'tournaments': {'required': False}
+        }
 
 class PredictionSerializer(serializers.ModelSerializer):
     # Esto es opcional, pero ayuda a ver el nombre del usuario en el JSON
