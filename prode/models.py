@@ -33,6 +33,11 @@ class Match(models.Model):
         ('finished', 'Finished'),
     ]
 
+    SOURCE_CHOICES = [
+        ('pool', 'Pool'),
+        ('custom', 'Custom'),
+    ]
+
     home_team = models.CharField(max_length=100)
     away_team = models.CharField(max_length=100)
     match_date = models.DateTimeField()
@@ -41,6 +46,14 @@ class Match(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='scheduled')
     stage = models.CharField(max_length=50, blank=True, null=True)
     tournaments = models.ManyToManyField(Tournament, related_name='matches')
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='custom')
+    template = models.ForeignKey(
+        'PredefinedTournamentTemplate',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='pool_matches'
+    )
 
     class Meta:
         verbose_name_plural = "Matches"
@@ -73,3 +86,30 @@ class Team(models.Model):
 
     def __str__(self):
         return self.name
+
+class PredefinedTournamentTemplate(models.Model):
+    """
+    A reusable template of matches that can be added to user tournaments.
+    """
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+class TemplateMatch(models.Model):
+    """
+    A match within a predefined tournament template.
+    """
+    template = models.ForeignKey(PredefinedTournamentTemplate, on_delete=models.CASCADE, related_name='matches')
+    home_team = models.CharField(max_length=100)
+    away_team = models.CharField(max_length=100)
+    match_date = models.DateTimeField()
+    stage = models.CharField(max_length=50, blank=True, null=True)
+
+    class Meta:
+        ordering = ['match_date']
+
+    def __str__(self):
+        return f"{self.home_team} vs {self.away_team}"

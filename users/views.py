@@ -37,6 +37,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 'id': user.id,
                 'username': user.username,
                 'email': user.email,
+                'is_superuser': user.is_superuser,
             }
 
             # Access token como cookie httpOnly
@@ -123,6 +124,6 @@ class RegisterView(generics.CreateAPIView):
             user = serializer.save()
             return Response({
                 "user": serializer.data["username"],
-                "message": "Usuario creado exitosamente. Ahora puedes acceder."
+                "message": "Account created successfully. You can now log in."
             }, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
