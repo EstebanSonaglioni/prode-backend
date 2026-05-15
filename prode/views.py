@@ -77,6 +77,15 @@ class TournamentViewSet(viewsets.ModelViewSet):
             Q(owner=user) | Q(participants=user)
         ).distinct()
 
+    def destroy(self, request, *args, **kwargs):
+        tournament = self.get_object()
+        if tournament.owner != request.user:
+            return Response(
+                {"detail": "Only the tournament admin can delete this tournament"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().destroy(request, *args, **kwargs)
+
     @action(detail=False, methods=['post'])
     def join_by_code(self, request):
         code = request.data.get('invitation_code')
