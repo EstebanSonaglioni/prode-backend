@@ -23,6 +23,28 @@ class Tournament(models.Model):
     def __str__(self):
         return self.name
 
+class Team(models.Model):
+    """
+    Represents a football team (national or club).
+    """
+    name = models.CharField(max_length=100)
+    code = models.CharField(max_length=10, blank=True, help_text="ISO country code for national teams")
+    flag_url = models.URLField(blank=True)
+    is_national = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['name']
+
+    def get_flag_url(self):
+        if self.flag_url:
+            return self.flag_url
+        if self.code:
+            return f"https://flagcdn.com/w80/{self.code.lower()}.png"
+        return None
+
+    def __str__(self):
+        return self.name
+
 class Match(models.Model):
     """
     Represents a real football match.
@@ -38,8 +60,16 @@ class Match(models.Model):
         ('custom', 'Custom'),
     ]
 
-    home_team = models.CharField(max_length=100)
-    away_team = models.CharField(max_length=100)
+    home_team = models.ForeignKey(
+        Team,
+        on_delete=models.CASCADE,
+        related_name='home_matches',
+    )
+    away_team = models.ForeignKey(
+        Team,
+        on_delete=models.CASCADE,
+        related_name='away_matches',
+    )
     match_date = models.DateTimeField()
     home_score_real = models.IntegerField(blank=True, null=True)
     away_score_real = models.IntegerField(blank=True, null=True)
@@ -59,7 +89,7 @@ class Match(models.Model):
         verbose_name_plural = "Matches"
 
     def __str__(self):
-        return f"{self.home_team} vs {self.away_team}"
+        return f"{self.home_team.name} vs {self.away_team.name}"
 
 class Prediction(models.Model):
     """
@@ -80,13 +110,6 @@ class Prediction(models.Model):
     def __str__(self):
         return f"{self.user.username} - {self.match}"
 
-class Team(models.Model):
-    name = models.CharField(max_length=100)
-    flag_url = models.URLField(blank=True)
-
-    def __str__(self):
-        return self.name
-
 class PredefinedTournamentTemplate(models.Model):
     """
     A reusable template of matches that can be added to user tournaments.
@@ -103,8 +126,16 @@ class TemplateMatch(models.Model):
     A match within a predefined tournament template.
     """
     template = models.ForeignKey(PredefinedTournamentTemplate, on_delete=models.CASCADE, related_name='matches')
-    home_team = models.CharField(max_length=100)
-    away_team = models.CharField(max_length=100)
+    home_team = models.ForeignKey(
+        Team,
+        on_delete=models.CASCADE,
+        related_name='template_home_matches',
+    )
+    away_team = models.ForeignKey(
+        Team,
+        on_delete=models.CASCADE,
+        related_name='template_away_matches',
+    )
     match_date = models.DateTimeField()
     stage = models.CharField(max_length=50, blank=True, null=True)
 
@@ -112,4 +143,4 @@ class TemplateMatch(models.Model):
         ordering = ['match_date']
 
     def __str__(self):
-        return f"{self.home_team} vs {self.away_team}"
+        return f"{self.home_team.name} vs {self.away_team.name}"

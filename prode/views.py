@@ -2,7 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import BasePermission, IsAuthenticated
-from .models import Tournament, Match, Prediction, PredefinedTournamentTemplate, TemplateMatch
+from .models import Tournament, Match, Prediction, PredefinedTournamentTemplate, TemplateMatch, Team
 from django.db.models import Q, Sum
 from .serializers import (
     TournamentSerializer,
@@ -10,6 +10,7 @@ from .serializers import (
     PredictionSerializer,
     PredefinedTournamentTemplateSerializer,
     TemplateMatchSerializer,
+    TeamSerializer,
 )
 
 
@@ -226,8 +227,8 @@ class MatchViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Only the tournament admin can create matches"}, status=status.HTTP_403_FORBIDDEN)
 
         match_data = {
-            'home_team': request.data.get('home_team'),
-            'away_team': request.data.get('away_team'),
+            'home_team_id': request.data.get('home_team_id'),
+            'away_team_id': request.data.get('away_team_id'),
             'match_date': request.data.get('match_date'),
             'stage': request.data.get('stage', ''),
             'source': 'custom',
@@ -388,3 +389,13 @@ class TemplateMatchViewSet(viewsets.ModelViewSet):
         if template_id:
             queryset = queryset.filter(template_id=template_id)
         return queryset
+
+
+class TeamViewSet(viewsets.ModelViewSet):
+    queryset = Team.objects.all().order_by('name')
+    serializer_class = TeamSerializer
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            return [IsAuthenticated()]
+        return [IsSuperUser()]

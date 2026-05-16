@@ -6,6 +6,7 @@ from .views import (
     PredictionViewSet,
     PredefinedTournamentTemplateViewSet,
     TemplateMatchViewSet,
+    TeamViewSet,
 )
 
 router = DefaultRouter()
@@ -14,6 +15,7 @@ router.register(r'matches', MatchViewSet)
 router.register(r'predictions', PredictionViewSet)
 router.register(r'predefined-templates', PredefinedTournamentTemplateViewSet, basename='predefinedtemplate')
 router.register(r'template-matches', TemplateMatchViewSet, basename='templatematch')
+router.register(r'teams', TeamViewSet, basename='team')
 
 urlpatterns = [
     path('', include(router.urls)),
