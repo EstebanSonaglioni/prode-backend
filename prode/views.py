@@ -4,6 +4,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import BasePermission, IsAuthenticated
 from .models import Tournament, Match, Prediction, PredefinedTournamentTemplate, TemplateMatch, Team
 from django.db.models import Q, Sum
+from django.db import transaction
 from django.contrib.contenttypes.models import ContentType
 from media.models import UploadedImage
 from media.serializers import BannerSerializer
@@ -23,28 +24,37 @@ class IsSuperUser(BasePermission):
 
 
 def recalculate_points(match):
-    """Recalculate points for all predictions on a finished match."""
+    """
+    Recalculate points for all predictions on a finished match.
+    Returns the number of predictions whose points_earned actually changed.
+    Safe to call multiple times (idempotent for the same scores).
+    """
     home_real = match.home_score_real
     away_real = match.away_score_real
 
     if home_real is None or away_real is None:
-        return
+        return 0
 
+    updated_count = 0
     predictions = Prediction.objects.filter(match=match)
     for prediction in predictions:
         home_guess = prediction.home_score_guess
         away_guess = prediction.away_score_guess
 
+        new_points = 0
         if home_guess == home_real and away_guess == away_real:
-            prediction.points_earned = 3
+            new_points = 3
         elif (home_guess > away_guess and home_real > away_real) or \
              (home_guess < away_guess and home_real < away_real) or \
              (home_guess == away_guess and home_real == away_real):
-            prediction.points_earned = 1
-        else:
-            prediction.points_earned = 0
+            new_points = 1
 
-        prediction.save()
+        if prediction.points_earned != new_points:
+            prediction.points_earned = new_points
+            prediction.save(update_fields=['points_earned'])
+            updated_count += 1
+
+    return updated_count
 
 
 class TournamentViewSet(viewsets.ModelViewSet):
@@ -366,12 +376,6 @@ class MatchViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_403_FORBIDDEN
                 )
 
-        if match.status != 'live':
-            return Response(
-                {"detail": f"Match must be live to finish, currently {match.status}"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
         home_score = request.data.get('home_score_real')
         away_score = request.data.get('away_score_real')
 
@@ -381,14 +385,78 @@ class MatchViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        match.home_score_real = int(home_score)
-        match.away_score_real = int(away_score)
+        home_score = int(home_score)
+        away_score = int(away_score)
+
+        # Idempotent: already finished with same scores -> no-op
+        if match.status == 'finished':
+            if match.home_score_real == home_score and match.away_score_real == away_score:
+                updated = recalculate_points(match)
+                return Response({
+                    "match": MatchSerializer(match).data,
+                    "predictions_updated": updated,
+                }, status=status.HTTP_200_OK)
+            # Scores changed -> update and recalculate
+            match.home_score_real = home_score
+            match.away_score_real = away_score
+            match.save(update_fields=['home_score_real', 'away_score_real'])
+            updated = recalculate_points(match)
+            return Response({
+                "match": MatchSerializer(match).data,
+                "predictions_updated": updated,
+            }, status=status.HTTP_200_OK)
+
+        if match.status != 'live':
+            return Response(
+                {"detail": f"Match must be live to finish, currently {match.status}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        match.home_score_real = home_score
+        match.away_score_real = away_score
         match.status = 'finished'
         match.save()
 
-        recalculate_points(match)
+        updated = recalculate_points(match)
 
-        return Response(MatchSerializer(match).data, status=status.HTTP_200_OK)
+        return Response({
+            "match": MatchSerializer(match).data,
+            "predictions_updated": updated,
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def recalculate(self, request, pk=None):
+        """
+        Force recalculation of points for a finished match.
+        Useful if the scoring logic was fixed and old matches need re-scoring.
+        """
+        match = self.get_object()
+
+        if match.status != 'finished':
+            return Response(
+                {"detail": f"Match must be finished to recalculate, currently {match.status}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if match.source == 'pool':
+            if not request.user.is_superuser:
+                return Response(
+                    {"detail": "Only superadmins can recalculate pool matches"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        else:
+            if not match.tournaments.filter(owner=request.user).exists():
+                return Response(
+                    {"detail": "Only the tournament admin can recalculate custom matches"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        updated = recalculate_points(match)
+
+        return Response({
+            "match": MatchSerializer(match).data,
+            "predictions_updated": updated,
+        }, status=status.HTTP_200_OK)
 
 
 class PredictionViewSet(viewsets.ModelViewSet):

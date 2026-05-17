@@ -49,8 +49,35 @@ class Team(models.Model):
             return f"https://flagcdn.com/w80/{self.code.lower()}.png"
         return None
 
+    def get_translated_name(self, language='en'):
+        """Return the team name in the requested language, fallback to default name."""
+        if language == 'en' or not language:
+            return self.name
+        try:
+            translation = self.translations.get(language=language)
+            return translation.name
+        except TeamTranslation.DoesNotExist:
+            return self.name
+
     def __str__(self):
         return self.name
+
+
+class TeamTranslation(models.Model):
+    """
+    Stores translated names for teams.
+    """
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='translations')
+    language = models.CharField(max_length=5, help_text="Language code, e.g. 'es', 'pt', 'fr'")
+    name = models.CharField(max_length=100)
+
+    class Meta:
+        unique_together = ('team', 'language')
+        verbose_name = 'Team Translation'
+        verbose_name_plural = 'Team Translations'
+
+    def __str__(self):
+        return f"{self.team.name} ({self.language}): {self.name}"
 
 class Match(models.Model):
     """

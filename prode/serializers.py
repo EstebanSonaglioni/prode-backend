@@ -1,17 +1,49 @@
 from django.utils import timezone
 from rest_framework import serializers
-from .models import Tournament, Match, Prediction, PredefinedTournamentTemplate, TemplateMatch, Team
+from .models import Tournament, Match, Prediction, PredefinedTournamentTemplate, TemplateMatch, Team, TeamTranslation
 from media.serializers import BannerSerializer
+
+
+class TeamTranslationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TeamTranslation
+        fields = ['language', 'name']
+
 
 class TeamSerializer(serializers.ModelSerializer):
     flag = serializers.SerializerMethodField()
+    translations = TeamTranslationSerializer(many=True, required=False)
 
     class Meta:
         model = Team
-        fields = ['id', 'name', 'code', 'flag_url', 'is_national', 'flag']
+        fields = ['id', 'name', 'code', 'flag_url', 'is_national', 'flag', 'translations']
 
     def get_flag(self, obj):
         return obj.get_flag_url()
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        if request:
+            lang = request.query_params.get('lang') or request.headers.get('Accept-Language', 'en').split(',')[0].split(';')[0].strip()
+            data['name'] = instance.get_translated_name(language=lang)
+        return data
+
+    def create(self, validated_data):
+        translations_data = validated_data.pop('translations', [])
+        team = super().create(validated_data)
+        for trans in translations_data:
+            TeamTranslation.objects.create(team=team, **trans)
+        return team
+
+    def update(self, instance, validated_data):
+        translations_data = validated_data.pop('translations', None)
+        team = super().update(instance, validated_data)
+        if translations_data is not None:
+            team.translations.all().delete()
+            for trans in translations_data:
+                TeamTranslation.objects.create(team=team, **trans)
+        return team
 
 
 class UpcomingMatchSerializer(serializers.ModelSerializer):
