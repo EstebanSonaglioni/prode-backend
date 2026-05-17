@@ -1,5 +1,7 @@
+from django.utils import timezone
 from rest_framework import serializers
 from .models import Tournament, Match, Prediction, PredefinedTournamentTemplate, TemplateMatch, Team
+from media.serializers import BannerSerializer
 
 class TeamSerializer(serializers.ModelSerializer):
     flag = serializers.SerializerMethodField()
@@ -12,10 +14,41 @@ class TeamSerializer(serializers.ModelSerializer):
         return obj.get_flag_url()
 
 
+class UpcomingMatchSerializer(serializers.ModelSerializer):
+    home_team = TeamSerializer(read_only=True)
+    away_team = TeamSerializer(read_only=True)
+    has_prediction = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Match
+        fields = ['id', 'home_team', 'away_team', 'match_date', 'stage', 'has_prediction']
+
+    def get_has_prediction(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return True
+        return Prediction.objects.filter(
+            match=obj, user=request.user, tournament=obj.tournaments.first()
+        ).exists()
+
+
 class TournamentSerializer(serializers.ModelSerializer):
+    banner = BannerSerializer(read_only=True)
+    upcoming_matches = serializers.SerializerMethodField()
+
     class Meta:
         model = Tournament
         fields = '__all__'
+
+    def get_upcoming_matches(self, obj):
+        now = timezone.now()
+        matches = obj.matches.filter(
+            status='scheduled',
+            match_date__gte=now,
+        ).order_by('match_date')[:3]
+        return UpcomingMatchSerializer(
+            matches, many=True, context=self.context
+        ).data
 
 
 class MatchSerializer(serializers.ModelSerializer):

@@ -13,6 +13,13 @@ class Tournament(models.Model):
     is_private = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     participants = models.ManyToManyField(User, related_name='joined_tournaments', blank=True)
+    banner = models.ForeignKey(
+        'media.UploadedImage',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='tournament_banner',
+    )
 
     def save(self, *args, **kwargs):
         if not self.invitation_code:

@@ -4,6 +4,9 @@ from rest_framework.decorators import action
 from rest_framework.permissions import BasePermission, IsAuthenticated
 from .models import Tournament, Match, Prediction, PredefinedTournamentTemplate, TemplateMatch, Team
 from django.db.models import Q, Sum
+from django.contrib.contenttypes.models import ContentType
+from media.models import UploadedImage
+from media.serializers import BannerSerializer
 from .serializers import (
     TournamentSerializer,
     MatchSerializer,
@@ -192,6 +195,84 @@ class TournamentViewSet(viewsets.ModelViewSet):
             id__in=tournament.matches.values_list('id', flat=True)
         )
         serializer = MatchSerializer(pool_matches, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def upload_banner(self, request, pk=None):
+        """Upload a banner image for this tournament."""
+        tournament = self.get_object()
+
+        if tournament.owner != request.user:
+            return Response(
+                {"detail": "Only the tournament admin can upload a banner"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        image_file = request.FILES.get('image')
+        if not image_file:
+            return Response(
+                {"detail": "No image file provided"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate extension
+        allowed_extensions = {'jpg', 'jpeg', 'png', 'webp', 'gif'}
+        ext = image_file.name.split('.')[-1].lower()
+        if ext not in allowed_extensions:
+            return Response(
+                {"detail": f"Invalid image format. Allowed: {', '.join(allowed_extensions)}."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate size (5MB)
+        max_size = 5 * 1024 * 1024
+        if image_file.size > max_size:
+            return Response(
+                {"detail": "Image too large. Max size is 5MB."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Remove old banner if exists
+        if tournament.banner:
+            old_banner = tournament.banner
+            tournament.banner = None
+            tournament.save(update_fields=['banner'])
+            old_banner.delete()
+
+        # Create new UploadedImage linked to tournament
+        ct = ContentType.objects.get_for_model(tournament)
+        uploaded = UploadedImage.objects.create(
+            image=image_file,
+            category='banner',
+            uploaded_by=request.user,
+            content_type=ct,
+            object_id=tournament.id,
+        )
+
+        tournament.banner = uploaded
+        tournament.save(update_fields=['banner'])
+
+        serializer = self.get_serializer(tournament)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def remove_banner(self, request, pk=None):
+        """Remove the banner image from this tournament."""
+        tournament = self.get_object()
+
+        if tournament.owner != request.user:
+            return Response(
+                {"detail": "Only the tournament admin can remove the banner"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if tournament.banner:
+            old_banner = tournament.banner
+            tournament.banner = None
+            tournament.save(update_fields=['banner'])
+            old_banner.delete()
+
+        serializer = self.get_serializer(tournament)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
