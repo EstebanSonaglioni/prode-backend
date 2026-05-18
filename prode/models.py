@@ -20,6 +20,9 @@ class Tournament(models.Model):
         blank=True,
         related_name='tournament_banner',
     )
+    is_finished = models.BooleanField(default=False, help_text="When true, no new participants can join and the final ranking is locked.")
+    finished_at = models.DateTimeField(blank=True, null=True)
+    is_visible_when_finished = models.BooleanField(default=True, help_text="If true, the tournament remains visible on the owner's dashboard after finishing.")
 
     def save(self, *args, **kwargs):
         if not self.invitation_code:
@@ -29,6 +32,29 @@ class Tournament(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class TournamentRankingSnapshot(models.Model):
+    """
+    Stores the final ranking of a tournament when it is finished.
+    This provides a historical record that won't change even if match scores are later updated.
+    """
+    tournament = models.ForeignKey(Tournament, on_delete=models.CASCADE, related_name='ranking_snapshots')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='tournament_rankings')
+    rank = models.PositiveIntegerField()
+    points = models.IntegerField()
+    exact_predictions = models.PositiveIntegerField(default=0, help_text="Predictions with 3 points (exact score)")
+    partial_predictions = models.PositiveIntegerField(default=0, help_text="Predictions with 1 point (correct outcome)")
+    total_predictions = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['tournament', 'rank']
+        unique_together = ('tournament', 'user')
+
+    def __str__(self):
+        return f"#{self.rank} {self.user.username} — {self.points} pts ({self.tournament.name})"
+
 
 class Team(models.Model):
     """

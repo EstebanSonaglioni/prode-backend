@@ -1,10 +1,14 @@
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
-from rest_framework.permissions import BasePermission, IsAuthenticated
-from .models import Tournament, Match, Prediction, PredefinedTournamentTemplate, TemplateMatch, Team
-from django.db.models import Q, Sum
+from rest_framework.permissions import BasePermission, IsAuthenticated, AllowAny
+from .models import (
+    Tournament, Match, Prediction, PredefinedTournamentTemplate,
+    TemplateMatch, Team, TournamentRankingSnapshot,
+)
+from django.db.models import Q, Sum, Count, Case, When, IntegerField
 from django.db import transaction
+from django.utils import timezone
 from django.contrib.contenttypes.models import ContentType
 from media.models import UploadedImage
 from media.serializers import BannerSerializer
@@ -15,6 +19,7 @@ from .serializers import (
     PredefinedTournamentTemplateSerializer,
     TemplateMatchSerializer,
     TeamSerializer,
+    TournamentRankingSnapshotSerializer,
 )
 
 
@@ -139,10 +144,43 @@ class TournamentViewSet(viewsets.ModelViewSet):
         code = request.data.get('invitation_code')
         try:
             tournament = Tournament.objects.get(invitation_code=code)
+            if tournament.is_finished:
+                return Response(
+                    {"detail": "This tournament has already finished and is no longer accepting participants"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             tournament.participants.add(request.user)
-            return Response({"detail": f"Joined {tournament.name}"}, status=status.HTTP_200_OK)
+            return Response({"detail": f"Joined {tournament.name}", "tournament_id": tournament.id}, status=status.HTTP_200_OK)
         except Tournament.DoesNotExist:
             return Response({"detail": "Invalid tournament code"}, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=False, methods=['get'], url_path='by_code', permission_classes=[AllowAny])
+    def by_code(self, request):
+        """
+        Return public tournament info by invitation code.
+        No auth required so prospective participants can preview before joining.
+        """
+        code = request.query_params.get('code', '').strip().upper()
+        if not code:
+            return Response(
+                {"detail": "code query parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            tournament = Tournament.objects.select_related('owner', 'banner').get(invitation_code=code)
+        except Tournament.DoesNotExist:
+            return Response({"detail": "Invalid tournament code"}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response({
+            "id": tournament.id,
+            "name": tournament.name,
+            "description": tournament.description,
+            "invitation_code": tournament.invitation_code,
+            "owner_name": tournament.owner.username,
+            "participant_count": tournament.participants.count(),
+            "is_finished": tournament.is_finished,
+            "banner_url": tournament.banner.image_url if tournament.banner else None,
+        })
 
     @action(detail=True, methods=['get'])
     def leaderboard(self, request, pk=None):
@@ -155,6 +193,102 @@ class TournamentViewSet(viewsets.ModelViewSet):
             .order_by('-total_points')
         )
         return Response(list(rankings))
+
+    @action(detail=True, methods=['post'])
+    def finish(self, request, pk=None):
+        """
+        Mark the tournament as finished and snapshot the final rankings.
+        Only the tournament owner can finish a tournament.
+        """
+        tournament = self.get_object()
+
+        if tournament.owner != request.user:
+            return Response(
+                {"detail": "Only the tournament admin can finish this tournament"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if tournament.is_finished:
+            return Response(
+                {"detail": "This tournament is already finished"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Build final leaderboard with detailed stats
+        predictions = Prediction.objects.filter(tournament=tournament)
+        rankings = (
+            predictions.values('user')
+            .annotate(
+                total_points=Sum('points_earned'),
+                exact=Count(Case(When(points_earned=3, then=1), output_field=IntegerField())),
+                partial=Count(Case(When(points_earned=1, then=1), output_field=IntegerField())),
+                total=Count('id'),
+            )
+            .order_by('-total_points')
+        )
+
+        with transaction.atomic():
+            created_snapshots = []
+            for rank_idx, entry in enumerate(rankings, start=1):
+                snapshot = TournamentRankingSnapshot.objects.create(
+                    tournament=tournament,
+                    user_id=entry['user'],
+                    rank=rank_idx,
+                    points=entry['total_points'] or 0,
+                    exact_predictions=entry['exact'],
+                    partial_predictions=entry['partial'],
+                    total_predictions=entry['total'],
+                )
+                created_snapshots.append(snapshot)
+
+            tournament.is_finished = True
+            tournament.finished_at = timezone.now()
+            tournament.save(update_fields=['is_finished', 'finished_at'])
+
+        serializer = TournamentRankingSnapshotSerializer(created_snapshots, many=True)
+        return Response(
+            {
+                "detail": f"Tournament finished. {len(created_snapshots)} participants ranked.",
+                "rankings": serializer.data,
+            },
+            status=status.HTTP_200_OK
+        )
+
+    @action(detail=True, methods=['post'])
+    def toggle_visibility(self, request, pk=None):
+        """
+        Toggle whether a finished tournament is visible on the dashboard.
+        Only the tournament owner can toggle visibility.
+        """
+        tournament = self.get_object()
+
+        if tournament.owner != request.user:
+            return Response(
+                {"detail": "Only the tournament admin can change visibility"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        tournament.is_visible_when_finished = not tournament.is_visible_when_finished
+        tournament.save(update_fields=['is_visible_when_finished'])
+
+        serializer = self.get_serializer(tournament)
+        return Response(
+            {
+                "detail": "Visibility updated",
+                "tournament": serializer.data,
+            },
+            status=status.HTTP_200_OK
+        )
+
+    @action(detail=True, methods=['get'])
+    def ranking_history(self, request, pk=None):
+        """
+        Return the stored ranking snapshot for a finished tournament.
+        """
+        tournament = self.get_object()
+        snapshots = tournament.ranking_snapshots.select_related('user').all()
+        serializer = TournamentRankingSnapshotSerializer(snapshots, many=True)
+        return Response(serializer.data)
 
     @action(detail=True, methods=['post'])
     def add_predefined(self, request, pk=None):

@@ -1,6 +1,9 @@
 from django.utils import timezone
 from rest_framework import serializers
-from .models import Tournament, Match, Prediction, PredefinedTournamentTemplate, TemplateMatch, Team, TeamTranslation
+from .models import (
+    Tournament, Match, Prediction, PredefinedTournamentTemplate,
+    TemplateMatch, Team, TeamTranslation, TournamentRankingSnapshot,
+)
 from media.serializers import BannerSerializer
 
 
@@ -130,6 +133,15 @@ class TemplateMatchSerializer(serializers.ModelSerializer):
             'id', 'template', 'home_team', 'away_team',
             'home_team_id', 'away_team_id', 'match_date', 'stage'
         ]
+
+
+class TournamentRankingSnapshotSerializer(serializers.ModelSerializer):
+    user_name = serializers.ReadOnlyField(source='user.username')
+
+    class Meta:
+        model = TournamentRankingSnapshot
+        fields = ['id', 'tournament', 'user', 'user_name', 'rank', 'points',
+                  'exact_predictions', 'partial_predictions', 'total_predictions', 'created_at']
 
 
 class PredefinedTournamentTemplateSerializer(serializers.ModelSerializer):
