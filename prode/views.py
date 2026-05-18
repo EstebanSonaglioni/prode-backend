@@ -57,6 +57,40 @@ def recalculate_points(match):
     return updated_count
 
 
+def resolve_team_ids_from_names(matches_data):
+    """
+    Given a list of match dicts that may contain home_team_name / away_team_name,
+    build a mapping of lowercase name -> Team id.
+    If any name is missing from the DB, return (None, missing_names).
+    Otherwise return (name_to_id_map, []).
+    Supports both id and name fields. When a name is provided, it takes precedence.
+    """
+    names = []
+    for item in matches_data:
+        if isinstance(item, dict):
+            for key in ('home_team_name', 'away_team_name'):
+                name = item.get(key, '').strip()
+                if name:
+                    names.append(name.lower())
+
+    if not names:
+        return {}, []
+
+    q = Q()
+    for name in set(names):
+        q |= Q(name__iexact=name)
+
+    teams = Team.objects.filter(q)
+    name_to_id = {}
+    for team in teams:
+        name_to_id[team.name.lower()] = team.id
+        for trans in team.translations.all():
+            name_to_id[trans.name.lower()] = team.id
+
+    missing = [n for n in set(names) if n not in name_to_id]
+    return name_to_id, missing
+
+
 class TournamentViewSet(viewsets.ModelViewSet):
     queryset = Tournament.objects.all()
     serializer_class = TournamentSerializer
@@ -284,6 +318,69 @@ class TournamentViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(tournament)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def bulk_matches(self, request, pk=None):
+        """
+        Create multiple matches and link them to this tournament.
+        Accepts home_team_id / away_team_id OR home_team_name / away_team_name.
+        All-or-nothing atomic transaction.
+        """
+        tournament = self.get_object()
+
+        if tournament.owner != request.user:
+            return Response(
+                {"detail": "Only the tournament admin can add matches"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        matches_data = request.data.get('matches', [])
+        if not matches_data:
+            return Response(
+                {"detail": "'matches' array is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not isinstance(matches_data, list):
+            return Response(
+                {"detail": "'matches' must be a list"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Resolve team names to IDs before creating
+        name_to_id, missing = resolve_team_ids_from_names(matches_data)
+        if missing:
+            return Response(
+                {"detail": f"Unknown team names: {', '.join(missing)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        with transaction.atomic():
+            created_matches = []
+            for idx, match_item in enumerate(matches_data):
+                match_payload = {
+                    'home_team_id': name_to_id.get(match_item.get('home_team_name', '').strip().lower()) or match_item.get('home_team_id'),
+                    'away_team_id': name_to_id.get(match_item.get('away_team_name', '').strip().lower()) or match_item.get('away_team_id'),
+                    'match_date': match_item.get('match_date'),
+                    'stage': match_item.get('stage', ''),
+                    'source': 'custom',
+                }
+                serializer = MatchSerializer(data=match_payload)
+                if not serializer.is_valid():
+                    return Response(
+                        {"detail": f"Match at index {idx} is invalid", "errors": serializer.errors},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                match = serializer.save()
+                match.tournaments.add(tournament)
+                created_matches.append(match)
+
+            response_serializer = MatchSerializer(created_matches, many=True)
+
+        return Response(
+            {"created": len(created_matches), "matches": response_serializer.data},
+            status=status.HTTP_201_CREATED
+        )
 
 
 class MatchViewSet(viewsets.ModelViewSet):
@@ -526,6 +623,62 @@ class PredefinedTournamentTemplateViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED
         )
 
+    @action(detail=True, methods=['post'])
+    def bulk_matches(self, request, pk=None):
+        """
+        Create multiple TemplateMatch records for this template.
+        Accepts home_team_id / away_team_id OR home_team_name / away_team_name.
+        All-or-nothing atomic transaction.
+        """
+        template = self.get_object()
+        matches_data = request.data.get('matches', [])
+
+        if not matches_data:
+            return Response(
+                {"detail": "'matches' array is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not isinstance(matches_data, list):
+            return Response(
+                {"detail": "'matches' must be a list"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Resolve team names to IDs before creating
+        name_to_id, missing = resolve_team_ids_from_names(matches_data)
+        if missing:
+            return Response(
+                {"detail": f"Unknown team names: {', '.join(missing)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        with transaction.atomic():
+            created = []
+            for idx, item in enumerate(matches_data):
+                payload = {
+                    'template': template.id,
+                    'home_team_id': name_to_id.get(item.get('home_team_name', '').strip().lower()) or item.get('home_team_id'),
+                    'away_team_id': name_to_id.get(item.get('away_team_name', '').strip().lower()) or item.get('away_team_id'),
+                    'match_date': item.get('match_date'),
+                    'stage': item.get('stage', ''),
+                }
+                serializer = TemplateMatchSerializer(data=payload)
+                if not serializer.is_valid():
+                    return Response(
+                        {"detail": f"Match at index {idx} is invalid", "errors": serializer.errors},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                tm = serializer.save()
+                created.append(tm)
+
+            response_serializer = TemplateMatchSerializer(created, many=True)
+
+        return Response(
+            {"created": len(created), "matches": response_serializer.data},
+            status=status.HTTP_201_CREATED
+        )
+
 
 class TemplateMatchViewSet(viewsets.ModelViewSet):
     queryset = TemplateMatch.objects.all()
@@ -548,3 +701,48 @@ class TeamViewSet(viewsets.ModelViewSet):
         if self.action in ['list', 'retrieve']:
             return [IsAuthenticated()]
         return [IsSuperUser()]
+
+    @action(detail=False, methods=['post'])
+    def bulk_create(self, request):
+        """
+        Create multiple teams from a JSON array.
+        Skips teams whose name already exists (case-insensitive).
+        All-or-nothing atomic transaction.
+        """
+        teams_data = request.data.get('teams', [])
+        if not teams_data:
+            return Response(
+                {"detail": "'teams' array is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not isinstance(teams_data, list):
+            return Response(
+                {"detail": "'teams' must be a list"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Pre-check for existing names to provide clear feedback
+        names_lower = [t.get('name', '').strip().lower() for t in teams_data if t.get('name')]
+        if names_lower:
+            q = Q()
+            for name in names_lower:
+                q |= Q(name__iexact=name)
+            existing = set(Team.objects.filter(q).values_list('name', flat=True))
+            if existing:
+                return Response(
+                    {"detail": f"Teams already exist: {', '.join(existing)}"},
+                    status=status.HTTP_409_CONFLICT
+                )
+
+        with transaction.atomic():
+            created = []
+            serializer = TeamSerializer(data=teams_data, many=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            created = serializer.data
+
+        return Response(
+            {"created": len(created), "teams": created},
+            status=status.HTTP_201_CREATED
+        )
