@@ -54,7 +54,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 value=access_token,
                 httponly=True,
                 secure=secure_conf,
-                samesite='Lax',
+                samesite='None' if secure_conf else 'Lax',
                 max_age=900,
             )
 
@@ -64,7 +64,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 value=refresh_token,
                 httponly=True,
                 secure=secure_conf,
-                samesite='Lax',
+                samesite='None' if secure_conf else 'Lax',
                 max_age=refresh_max_age,
             )
 
@@ -102,7 +102,7 @@ class CustomTokenRefreshView(TokenRefreshView):
                 value=new_refresh,
                 httponly=True,
                 secure=secure_conf,
-                samesite='Lax',
+                samesite='None' if secure_conf else 'Lax',
                 max_age=max_age,
             )
 

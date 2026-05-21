@@ -2,7 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from django.http import FileResponse, Http404
+from django.http import FileResponse, Http404, HttpResponseRedirect
 from .models import UploadedImage
 from .serializers import UploadedImageSerializer
 from .permissions import CanUploadImage
@@ -23,14 +23,18 @@ class UploadedImageViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='download')
     def download(self, request, pk=None):
-        """Return the raw image bytes."""
+        """Return the raw image bytes, or redirect to S3 URL if using remote storage."""
         try:
             image_obj = self.get_object()
         except UploadedImage.DoesNotExist:
             raise Http404("Image not found.")
 
-        file_path = image_obj.image.path
-        if not file_path:
+        if not image_obj.image:
             raise Http404("Image file not found.")
 
-        return FileResponse(open(file_path, 'rb'), content_type='image/*')
+        try:
+            file_path = image_obj.image.path
+            return FileResponse(open(file_path, 'rb'), content_type='image/*')
+        except (NotImplementedError, ValueError, FileNotFoundError):
+            # Remote storage (S3): redirect to public URL
+            return HttpResponseRedirect(image_obj.image.url)
