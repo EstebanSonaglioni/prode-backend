@@ -1,6 +1,6 @@
 from django.db import models
 from django.utils.crypto import get_random_string
-from django.contrib.auth.models import User # Usamos el modelo de usuario por defecto de Django
+from django.conf import settings
 
 class Tournament(models.Model):
     """
@@ -9,10 +9,10 @@ class Tournament(models.Model):
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True, null=True)
     invitation_code = models.CharField(max_length=20, unique=True, editable=False)
-    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='created_tournaments')
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='created_tournaments')
     is_private = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    participants = models.ManyToManyField(User, related_name='joined_tournaments', blank=True)
+    participants = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name='joined_tournaments', blank=True)
     banner = models.ForeignKey(
         'media.UploadedImage',
         on_delete=models.SET_NULL,
@@ -40,7 +40,7 @@ class TournamentRankingSnapshot(models.Model):
     This provides a historical record that won't change even if match scores are later updated.
     """
     tournament = models.ForeignKey(Tournament, on_delete=models.CASCADE, related_name='ranking_snapshots')
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='tournament_rankings')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='tournament_rankings')
     rank = models.PositiveIntegerField()
     points = models.IntegerField()
     exact_predictions = models.PositiveIntegerField(default=0, help_text="Predictions with 3 points (exact score)")
@@ -155,7 +155,7 @@ class Prediction(models.Model):
     """
     A user's prediction for a specific match within a tournament.
     """
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='predictions')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='predictions')
     tournament = models.ForeignKey(Tournament, on_delete=models.CASCADE, related_name='predictions')
     match = models.ForeignKey(Match, on_delete=models.CASCADE, related_name='predictions')
     home_score_guess = models.IntegerField()

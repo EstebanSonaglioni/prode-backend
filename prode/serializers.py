@@ -115,6 +115,9 @@ class PredictionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Prediction
         fields = '__all__'
+        extra_kwargs = {
+            'user': {'read_only': True}
+        }
 
 
 class TemplateMatchSerializer(serializers.ModelSerializer):

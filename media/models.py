@@ -1,7 +1,7 @@
 import uuid
 import os
 from django.db import models
-from django.contrib.auth.models import User
+from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 
@@ -25,7 +25,7 @@ class UploadedImage(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     image = models.ImageField(upload_to=get_upload_path)
     category = models.CharField(max_length=30, choices=CATEGORY_CHOICES, default='other')
-    uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='uploaded_images')
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='uploaded_images')
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     # Generic relation to link the image to any object (Tournament, User, etc.)

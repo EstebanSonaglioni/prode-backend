@@ -188,11 +188,16 @@ class TournamentViewSet(viewsets.ModelViewSet):
         tournament = self.get_object()
         rankings = (
             Prediction.objects.filter(tournament=tournament)
-            .values('user__id', 'user__username')
+            .values('user__id', 'user__username', 'user__avatar')
             .annotate(total_points=Sum('points_earned'))
             .order_by('-total_points')
         )
-        return Response(list(rankings))
+        result = []
+        for entry in rankings:
+            avatar_path = entry.get('user__avatar')
+            entry['avatar_url'] = f"{settings.MEDIA_URL}{avatar_path}" if avatar_path else None
+            result.append(entry)
+        return Response(result)
 
     @action(detail=True, methods=['post'])
     def finish(self, request, pk=None):
@@ -591,6 +596,57 @@ class MatchViewSet(viewsets.ModelViewSet):
         return Response(MatchSerializer(match).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
+    def update_score(self, request, pk=None):
+        """
+        Update the live score of a match without finishing it.
+        Does NOT recalculate prediction points.
+        """
+        match = self.get_object()
+
+        if match.source == 'pool':
+            if not request.user.is_superuser:
+                return Response(
+                    {"detail": "Only superadmins can update pool match scores"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        else:
+            if not match.tournaments.filter(owner=request.user).exists():
+                return Response(
+                    {"detail": "Only the tournament admin can update custom match scores"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        if match.status != 'live':
+            return Response(
+                {"detail": f"Match must be live to update score, currently {match.status}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        home_score = request.data.get('home_score_real')
+        away_score = request.data.get('away_score_real')
+
+        if home_score is None or away_score is None:
+            return Response(
+                {"detail": "home_score_real and away_score_real are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            home_score = int(home_score)
+            away_score = int(away_score)
+        except (ValueError, TypeError):
+            return Response(
+                {"detail": "Scores must be valid integers"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        match.home_score_real = home_score
+        match.away_score_real = away_score
+        match.save(update_fields=['home_score_real', 'away_score_real'])
+
+        return Response(MatchSerializer(match).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
     def finish(self, request, pk=None):
         match = self.get_object()
 
@@ -610,14 +666,38 @@ class MatchViewSet(viewsets.ModelViewSet):
         home_score = request.data.get('home_score_real')
         away_score = request.data.get('away_score_real')
 
-        if home_score is None or away_score is None:
-            return Response(
-                {"detail": "home_score_real and away_score_real are required"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # If scores not provided, fall back to current live scores
+        if home_score is None:
+            if match.home_score_real is None:
+                return Response(
+                    {"detail": "home_score_real is required when no live score exists"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            home_score = match.home_score_real
+        else:
+            try:
+                home_score = int(home_score)
+            except (ValueError, TypeError):
+                return Response(
+                    {"detail": "home_score_real must be a valid integer"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-        home_score = int(home_score)
-        away_score = int(away_score)
+        if away_score is None:
+            if match.away_score_real is None:
+                return Response(
+                    {"detail": "away_score_real is required when no live score exists"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            away_score = match.away_score_real
+        else:
+            try:
+                away_score = int(away_score)
+            except (ValueError, TypeError):
+                return Response(
+                    {"detail": "away_score_real must be a valid integer"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         # Idempotent: already finished with same scores -> no-op
         if match.status == 'finished':
@@ -653,6 +733,46 @@ class MatchViewSet(viewsets.ModelViewSet):
         return Response({
             "match": MatchSerializer(match).data,
             "predictions_updated": updated,
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def restart(self, request, pk=None):
+        """
+        Reset a finished match back to scheduled.
+        Clears scores and resets all prediction points to 0.
+        Useful for testing.
+        """
+        match = self.get_object()
+
+        if match.status != 'finished':
+            return Response(
+                {"detail": f"Match must be finished to restart, currently {match.status}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if match.source == 'pool':
+            if not request.user.is_superuser:
+                return Response(
+                    {"detail": "Only superadmins can restart pool matches"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        else:
+            if not match.tournaments.filter(owner=request.user).exists():
+                return Response(
+                    {"detail": "Only the tournament admin can restart custom matches"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        match.status = 'scheduled'
+        match.home_score_real = None
+        match.away_score_real = None
+        match.save(update_fields=['status', 'home_score_real', 'away_score_real'])
+
+        predictions_reset = Prediction.objects.filter(match=match).update(points_earned=0)
+
+        return Response({
+            "match": MatchSerializer(match).data,
+            "predictions_reset": predictions_reset,
         }, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])

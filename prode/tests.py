@@ -1,9 +1,11 @@
 from django.test import TestCase
-from django.contrib.auth.models import User
+from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 from rest_framework import status
 from .models import Tournament, Match, Prediction, Team
 from .views import recalculate_points
+
+User = get_user_model()
 
 
 class IdempotentPointsTests(TestCase):
