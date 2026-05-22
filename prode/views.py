@@ -28,6 +28,15 @@ class IsSuperUser(BasePermission):
         return request.user and request.user.is_superuser
 
 
+class ReadAuthenticatedWriteSuperUserMixin:
+    """DRF mixin: list/retrieve require auth, everything else requires superuser."""
+
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve'):
+            return [IsAuthenticated()]
+        return [IsSuperUser()]
+
+
 def recalculate_points(match):
     """
     Recalculate points for all predictions on a finished match.
@@ -836,14 +845,11 @@ class PredictionViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
 
-class PredefinedTournamentTemplateViewSet(viewsets.ModelViewSet):
+class PredefinedTournamentTemplateViewSet(
+    ReadAuthenticatedWriteSuperUserMixin, viewsets.ModelViewSet
+):
     queryset = PredefinedTournamentTemplate.objects.prefetch_related('matches').all()
     serializer_class = PredefinedTournamentTemplateSerializer
-
-    def get_permissions(self):
-        if self.action in ['list', 'retrieve']:
-            return [IsAuthenticated()]
-        return [IsSuperUser()]
 
     @action(detail=True, methods=['post'])
     def publish(self, request, pk=None):
@@ -947,14 +953,9 @@ class TemplateMatchViewSet(viewsets.ModelViewSet):
         return queryset
 
 
-class TeamViewSet(viewsets.ModelViewSet):
+class TeamViewSet(ReadAuthenticatedWriteSuperUserMixin, viewsets.ModelViewSet):
     queryset = Team.objects.all().order_by('name')
     serializer_class = TeamSerializer
-
-    def get_permissions(self):
-        if self.action in ['list', 'retrieve']:
-            return [IsAuthenticated()]
-        return [IsSuperUser()]
 
     @action(detail=False, methods=['post'])
     def bulk_create(self, request):
