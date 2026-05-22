@@ -1,17 +1,21 @@
+from functools import wraps
+
+from django.conf import settings
+from django.contrib.contenttypes.models import ContentType
+from django.db import transaction
+from django.db.models import Q, Sum, Count, Case, When, IntegerField
+from django.utils import timezone
 from rest_framework import viewsets, status
-from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import BasePermission, IsAuthenticated, AllowAny
+from rest_framework.response import Response
+
+from media.models import UploadedImage
+from media.serializers import BannerSerializer
 from .models import (
     Tournament, Match, Prediction, PredefinedTournamentTemplate,
     TemplateMatch, Team, TournamentRankingSnapshot,
 )
-from django.db.models import Q, Sum, Count, Case, When, IntegerField
-from django.db import transaction
-from django.utils import timezone
-from django.contrib.contenttypes.models import ContentType
-from media.models import UploadedImage
-from media.serializers import BannerSerializer
 from .serializers import (
     TournamentSerializer,
     MatchSerializer,
@@ -35,6 +39,33 @@ class ReadAuthenticatedWriteSuperUserMixin:
         if self.action in ('list', 'retrieve'):
             return [IsAuthenticated()]
         return [IsSuperUser()]
+
+
+def require_tournament_owner(detail=None):
+    """Decorator for TournamentViewSet @action methods that require owner privileges."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, request, *args, **kwargs):
+            tournament = self.get_object()
+            if tournament.owner != request.user:
+                msg = detail or "Only the tournament admin can perform this action"
+                return Response(
+                    {"detail": msg},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            return func(self, request, *args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def check_tournament_owner(request, tournament, detail="perform this action"):
+    """Standalone helper for non-standard owner checks (e.g. MatchViewSet)."""
+    if tournament.owner != request.user:
+        return Response(
+            {"detail": f"Only the tournament admin can {detail}"},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    return None
 
 
 def recalculate_points(match):
@@ -94,7 +125,7 @@ def resolve_team_ids_from_names(matches_data):
     for name in set(names):
         q |= Q(name__iexact=name)
 
-    teams = Team.objects.filter(q)
+    teams = Team.objects.filter(q).prefetch_related('translations')
     name_to_id = {}
     for team in teams:
         name_to_id[team.name.lower()] = team.id
@@ -135,17 +166,16 @@ class TournamentViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        return Tournament.objects.filter(
-            Q(owner=user) | Q(participants=user)
-        ).distinct()
+        return (
+            Tournament.objects
+            .filter(Q(owner=user) | Q(participants=user))
+            .distinct()
+            .select_related('owner', 'banner')
+            .prefetch_related('matches', 'participants')
+        )
 
+    @require_tournament_owner("delete this tournament")
     def destroy(self, request, *args, **kwargs):
-        tournament = self.get_object()
-        if tournament.owner != request.user:
-            return Response(
-                {"detail": "Only the tournament admin can delete this tournament"},
-                status=status.HTTP_403_FORBIDDEN
-            )
         return super().destroy(request, *args, **kwargs)
 
     @action(detail=False, methods=['post'])
@@ -209,18 +239,13 @@ class TournamentViewSet(viewsets.ModelViewSet):
         return Response(result)
 
     @action(detail=True, methods=['post'])
+    @require_tournament_owner("finish this tournament")
     def finish(self, request, pk=None):
         """
         Mark the tournament as finished and snapshot the final rankings.
         Only the tournament owner can finish a tournament.
         """
         tournament = self.get_object()
-
-        if tournament.owner != request.user:
-            return Response(
-                {"detail": "Only the tournament admin can finish this tournament"},
-                status=status.HTTP_403_FORBIDDEN
-            )
 
         if tournament.is_finished:
             return Response(
@@ -269,18 +294,13 @@ class TournamentViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=['post'])
+    @require_tournament_owner("change visibility")
     def toggle_visibility(self, request, pk=None):
         """
         Toggle whether a finished tournament is visible on the dashboard.
         Only the tournament owner can toggle visibility.
         """
         tournament = self.get_object()
-
-        if tournament.owner != request.user:
-            return Response(
-                {"detail": "Only the tournament admin can change visibility"},
-                status=status.HTTP_403_FORBIDDEN
-            )
 
         tournament.is_visible_when_finished = not tournament.is_visible_when_finished
         tournament.save(update_fields=['is_visible_when_finished'])
@@ -305,15 +325,10 @@ class TournamentViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     @action(detail=True, methods=['post'])
+    @require_tournament_owner("add predefined matches")
     def add_predefined(self, request, pk=None):
         """Link existing pool matches from a predefined template to this tournament."""
         tournament = self.get_object()
-
-        if tournament.owner != request.user:
-            return Response(
-                {"detail": "Only the tournament admin can add predefined matches"},
-                status=status.HTTP_403_FORBIDDEN
-            )
 
         template_id = request.data.get('template_id')
         if not template_id:
@@ -352,15 +367,10 @@ class TournamentViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=['post'])
+    @require_tournament_owner("add pool matches")
     def add_pool_matches(self, request, pk=None):
         """Link all available pool matches not already in this tournament."""
         tournament = self.get_object()
-
-        if tournament.owner != request.user:
-            return Response(
-                {"detail": "Only the tournament admin can add pool matches"},
-                status=status.HTTP_403_FORBIDDEN
-            )
 
         pool_matches = Match.objects.filter(source='pool').exclude(
             id__in=tournament.matches.values_list('id', flat=True)
@@ -390,15 +400,10 @@ class TournamentViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
+    @require_tournament_owner("upload a banner")
     def upload_banner(self, request, pk=None):
         """Upload a banner image for this tournament."""
         tournament = self.get_object()
-
-        if tournament.owner != request.user:
-            return Response(
-                {"detail": "Only the tournament admin can upload a banner"},
-                status=status.HTTP_403_FORBIDDEN
-            )
 
         image_file = request.FILES.get('image')
         if not image_file:
@@ -448,15 +453,10 @@ class TournamentViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
+    @require_tournament_owner("remove the banner")
     def remove_banner(self, request, pk=None):
         """Remove the banner image from this tournament."""
         tournament = self.get_object()
-
-        if tournament.owner != request.user:
-            return Response(
-                {"detail": "Only the tournament admin can remove the banner"},
-                status=status.HTTP_403_FORBIDDEN
-            )
 
         if tournament.banner:
             old_banner = tournament.banner
@@ -468,6 +468,7 @@ class TournamentViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
+    @require_tournament_owner("add matches")
     def bulk_matches(self, request, pk=None):
         """
         Create multiple matches and link them to this tournament.
@@ -475,12 +476,6 @@ class TournamentViewSet(viewsets.ModelViewSet):
         All-or-nothing atomic transaction.
         """
         tournament = self.get_object()
-
-        if tournament.owner != request.user:
-            return Response(
-                {"detail": "Only the tournament admin can add matches"},
-                status=status.HTTP_403_FORBIDDEN
-            )
 
         matches_data = request.data.get('matches', [])
         if not matches_data:
@@ -537,7 +532,7 @@ class MatchViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        queryset = Match.objects.all()
+        queryset = Match.objects.select_related('home_team', 'away_team', 'template')
         tournament_id = self.request.query_params.get('tournament')
         source = self.request.query_params.get('source')
         template_id = self.request.query_params.get('template')
@@ -559,8 +554,9 @@ class MatchViewSet(viewsets.ModelViewSet):
         except Tournament.DoesNotExist:
             return Response({"detail": "Tournament not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        if tournament.owner != request.user:
-            return Response({"detail": "Only the tournament admin can create matches"}, status=status.HTTP_403_FORBIDDEN)
+        resp = check_tournament_owner(request, tournament, "create matches")
+        if resp:
+            return resp
 
         match_data = {
             'home_team_id': request.data.get('home_team_id'),
@@ -826,7 +822,11 @@ class PredictionViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = Prediction.objects.filter(user=user)
+        queryset = (
+            Prediction.objects
+            .filter(user=user)
+            .select_related('match', 'tournament')
+        )
         tournament_id = self.request.query_params.get('tournament')
         if tournament_id:
             queryset = queryset.filter(tournament_id=tournament_id)
