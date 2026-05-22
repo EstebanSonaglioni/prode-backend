@@ -192,12 +192,17 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 # Django-storages / whitenoise configuration
+if os.environ.get("DEFAULT_FILE_STORAGE") == "storages.backends.s3boto3.S3Boto3Storage":
+    default_storage_backend = "core.storage_backends.SupabasePublicStorage"
+else:
+    default_storage_backend = os.environ.get(
+        "DEFAULT_FILE_STORAGE",
+        "django.core.files.storage.FileSystemStorage"
+    )
+
 STORAGES = {
     "default": {
-        "BACKEND": os.environ.get(
-            "DEFAULT_FILE_STORAGE",
-            "django.core.files.storage.FileSystemStorage"
-        ),
+        "BACKEND": default_storage_backend,
     },
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
