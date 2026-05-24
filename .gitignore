@@ -1,11 +1,15 @@
 .venv
 *.pyc
 .env
+. agents/
+# SQLite databases (including backups)
 db.sqlite3
 db.sqlite3.*
+# Temporary migration scripts
 backup.json
 *_dump.json
 migrate_data.py
 migrate_users.py
+# Obsolete settings files
 /settings.py
 core/settings_prod.py
